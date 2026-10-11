@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, Check } from "lucide-react";
+import { ArrowLeft, List, MessageSquare, X } from "lucide-react";
 import type {
   Paper,
   SimplifiedSection,
@@ -13,87 +12,105 @@ import type {
   GeneratedLab,
   WebSearchResult,
 } from "@/lib/types";
-import { getOutputSnapshot, getPaperDetail } from "@/lib/api";
+import {
+  getOutputSnapshot,
+  getPaperDetail,
+  getAgentJobs,
+  generateManualImage,
+  generateManualCanvas,
+  generateManualVideo,
+  regenerateImage,
+  downloadLab,
+  downloadLabsZip,
+} from "@/lib/api";
 import { subscribeToOutput } from "@/lib/sse";
+import type { AgentStatusEvent } from "@/lib/sse";
+import {
+  prepareSections,
+  distributeMedia,
+  labsForSection,
+  sourcesForSection,
+  readingMinutes,
+} from "@/lib/reader";
 import useUpsert from "@/hooks/useUpsert";
-import OutputTimeline from "@/components/output/OutputTimeline";
-import Spinner from "@/components/ui/Spinner";
-import { SkeletonCard } from "@/components/ui/Skeleton";
+import { useToast } from "@/components/ui/Toast";
+import ChatPanel, { type ChatRequest } from "@/components/chat/ChatPanel";
+import AgentActivityPanel from "@/components/output/AgentActivityPanel";
+import ContentsNav from "@/components/output/reader/ContentsNav";
+import SectionArticle from "@/components/output/reader/SectionArticle";
+import SectionRail, { type MediaRequestType } from "@/components/output/reader/SectionRail";
+import PipelineStatus from "@/components/output/reader/PipelineStatus";
+import FrontMatter from "@/components/output/reader/FrontMatter";
+import Appendix from "@/components/output/reader/Appendix";
+import { SkeletonText } from "@/components/ui/Skeleton";
 
-/* ── Status badge ──────────────────────────────────────────────── */
+/* ── Lazy section wrapper ─────────────────────────────────────── */
 
-function StatusBadge({
-  label,
-  count,
-  color,
+function LazySection({
+  id,
+  estimatedHeight,
+  children,
 }: {
-  label: string;
-  count: number;
-  color: string;
+  id: string;
+  estimatedHeight: number;
+  children: ReactNode;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px 0px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  if (visible) return <>{children}</>;
+
   return (
-    <div className="flex items-center gap-1.5 text-xs">
-      <span className={`inline-block w-2 h-2 rounded-full ${color}`} />
-      <span className="text-zinc-400">
-        {count} {label}
-      </span>
+    <div
+      ref={ref}
+      id={`section-${id}`}
+      data-section-id={id}
+      style={{ minHeight: estimatedHeight }}
+      className="scroll-mt-20 pb-14 mb-14 border-b border-rule last:border-b-0 flex items-start pt-4"
+      aria-hidden
+    >
+      <div className="space-y-3 w-full">
+        <div className="skeleton-shimmer h-3 w-24 rounded" />
+        <div className="skeleton-shimmer h-10 w-3/5 rounded" />
+        <div className="skeleton-shimmer h-3 w-full rounded mt-6" />
+        <div className="skeleton-shimmer h-3 w-full rounded" />
+        <div className="skeleton-shimmer h-3 w-4/5 rounded" />
+      </div>
     </div>
   );
 }
 
-/* ── Sidebar Table of Contents ─────────────────────────────────── */
-
-function SidebarTOC({
-  sections,
-  activeSectionId,
-}: {
-  sections: SimplifiedSection[];
-  activeSectionId: string | null;
-}) {
-  const scrollTo = (id: string) => {
-    document.getElementById(`section-${id}`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  };
-
-  if (sections.length === 0) return null;
-
-  return (
-    <nav className="hidden lg:block sticky top-20 w-56 shrink-0 max-h-[calc(100vh-6rem)] overflow-y-auto pr-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">
-        Contents
-      </h3>
-      <ul className="space-y-1">
-        {sections.map((s) => {
-          const isActive = activeSectionId === s.id;
-          return (
-            <li key={s.id}>
-              <button
-                onClick={() => scrollTo(s.id)}
-                className={`w-full text-left text-sm px-2 py-1.5 rounded-md transition-colors truncate
-                  ${
-                    isActive
-                      ? "bg-indigo-600/20 text-indigo-300 font-medium"
-                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60"
-                  }`}
-              >
-                {s.title ?? `Section ${s.section_index + 1}`}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
-  );
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
-
-/* ── Main component ────────────────────────────────────────────── */
 
 export default function OutputInner() {
   const { id: paperId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { toast } = useToast();
 
+  /* ── Data ───────────────────────────────────────────────────── */
   const [paper, setPaper] = useState<Paper | null>(null);
   const [sections, upsertSection, setSections] = useUpsert<SimplifiedSection>();
   const [images, upsertImage] = useUpsert<GeneratedImage>();
@@ -101,53 +118,57 @@ export default function OutputInner() {
   const [videos, upsertVideo, setVideos] = useUpsert<VideoJob>();
   const [labs, upsertLab] = useUpsert<GeneratedLab>();
   const [webSearchResults, upsertWebResult] = useUpsert<WebSearchResult>();
-
-  const [status, setStatus] = useState<string>("loading");
-  const [showPdf, setShowPdf] = useState(false);
+  const [agentJobs, setAgentJobs] = useState<AgentStatusEvent[]>([]);
+  const [status, setStatus] = useState<"loading" | "running" | "done">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
 
-  const sectionRefs = useRef<Map<string, IntersectionObserverEntry>>(new Map());
+  /* ── UI state ───────────────────────────────────────────────── */
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const [readIds, setReadIds] = useState<Set<string>>(() => new Set());
+  const [progress, setProgress] = useState(0);
+  const [navOpen, setNavOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatRequest, setChatRequest] = useState<ChatRequest | null>(null);
+  const [pendingMedia, setPendingMedia] = useState<Record<string, MediaRequestType>>({});
+  const [downloadingLabId, setDownloadingLabId] = useState<string | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
 
   const sessionId =
     typeof window !== "undefined"
       ? localStorage.getItem(`cognexus_session_${paperId}`) || paperId
       : paperId;
 
-  /* Load existing snapshot on mount */
+  /* ── Load snapshot ──────────────────────────────────────────── */
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
-      try {
-        const [snapshot, paperDetail] = await Promise.allSettled([
-          getOutputSnapshot(paperId),
-          getPaperDetail(paperId),
-        ]);
+      const [snapshot, paperDetail, agentData] = await Promise.allSettled([
+        getOutputSnapshot(paperId),
+        getPaperDetail(paperId),
+        getAgentJobs(paperId),
+      ]);
+      if (cancelled) return;
 
-        if (cancelled) return;
+      if (paperDetail.status === "fulfilled") setPaper(paperDetail.value);
 
-        if (paperDetail.status === "fulfilled") {
-          setPaper(paperDetail.value);
-        }
-
-        if (snapshot.status === "fulfilled") {
-          const data = snapshot.value;
-          if (data.paper) setPaper(data.paper);
-          setSections(data.sections ?? []);
-          setVideos(data.videos ?? []);
-
-          /* Bulk-set remaining arrays via upsert for each item */
-          (data.images ?? []).forEach((img: GeneratedImage) => upsertImage(img));
-          (data.canvases ?? []).forEach((c: GeneratedCanvas) => upsertCanvas(c));
-          (data.labs ?? []).forEach((l: GeneratedLab) => upsertLab(l));
-          setStatus(data.status ?? "running");
-        } else {
-          setStatus("running");
-        }
-      } catch {
-        if (!cancelled) setStatus("running");
+      if (snapshot.status === "fulfilled") {
+        const data = snapshot.value as unknown as Record<string, unknown>;
+        setSections((data.simplified_sections ?? data.sections ?? []) as SimplifiedSection[]);
+        setVideos((data.videos ?? []) as VideoJob[]);
+        ((data.images ?? []) as GeneratedImage[]).forEach(upsertImage);
+        ((data.canvases ?? []) as GeneratedCanvas[]).forEach(upsertCanvas);
+        ((data.labs ?? []) as GeneratedLab[]).forEach(upsertLab);
+        ((data.web_search_results ?? []) as WebSearchResult[]).forEach(upsertWebResult);
+        const jobs = (data.agent_jobs ?? []) as AgentStatusEvent[];
+        const allDone =
+          jobs.length > 0 && jobs.every((j) => j.status === "done" || j.status === "failed");
+        setStatus(allDone ? "done" : "running");
+      } else {
+        setStatus("running");
       }
+
+      if (agentData.status === "fulfilled") setAgentJobs(agentData.value.agents);
     }
 
     load();
@@ -157,11 +178,10 @@ export default function OutputInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperId]);
 
-  /* Subscribe to SSE */
+  /* ── Live updates ───────────────────────────────────────────── */
   useEffect(() => {
-    if (status === "done") return;
-
-    const cleanup = subscribeToOutput(paperId, {
+    if (status !== "running") return;
+    return subscribeToOutput(paperId, {
       onSimplification: upsertSection,
       onImage: upsertImage,
       onCanvas: upsertCanvas,
@@ -169,184 +189,472 @@ export default function OutputInner() {
       onVideoDone: upsertVideo,
       onLab: upsertLab,
       onResearch: upsertWebResult,
+      onAgentStatus: setAgentJobs,
       onComplete: () => setStatus("done"),
-      onError: () => setError("Connection lost. Refresh to reconnect."),
+      onError: () => setError("Live updates stopped. Refresh the page to reconnect."),
     });
-
-    return cleanup;
   }, [paperId, status, upsertSection, upsertImage, upsertCanvas, upsertVideo, upsertLab, upsertWebResult]);
 
-  /* Intersection observer for active section tracking */
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          sectionRefs.current.set(entry.target.id, entry);
-        });
+  /* ── Derived reading model ──────────────────────────────────── */
+  const prepared = useMemo(() => prepareSections(sections), [sections]);
 
-        let topVisible: string | null = null;
-        let topY = Infinity;
-
-        sectionRefs.current.forEach((entry, id) => {
-          if (entry.isIntersecting && entry.boundingClientRect.top < topY) {
-            topY = entry.boundingClientRect.top;
-            topVisible = id.replace("section-", "");
-          }
-        });
-
-        if (topVisible) setActiveSectionId(topVisible);
-      },
-      { rootMargin: "-80px 0px -40% 0px", threshold: 0 },
-    );
-
-    const elements = document.querySelectorAll("[data-section-id]");
-    elements.forEach((el) => observer.observe(el));
-
-    return () => observer.disconnect();
-  }, [sections]);
-
-  /* Callback for video status updates from VideoBlock */
-  const handleVideoUpdate = useCallback(
-    (v: VideoJob) => {
-      upsertVideo(v);
-    },
-    [upsertVideo],
+  const distribution = useMemo(
+    () => distributeMedia(prepared, images, canvases, videos),
+    [prepared, images, canvases, videos],
   );
 
-  /* Loading skeleton state */
-  if (status === "loading" && sections.length === 0) {
-    return (
-      <div className="min-h-screen bg-background text-zinc-100">
-        <div className="max-w-4xl mx-auto px-4 pt-20 space-y-4">
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-        </div>
-      </div>
-    );
-  }
+  const figureCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    distribution.bySection.forEach((list, id) => m.set(id, list.length));
+    return m;
+  }, [distribution]);
 
-  const sortedSections = [...sections].sort(
-    (a, b) => a.section_index - b.section_index,
+  const totalFigures = useMemo(
+    () => [...distribution.bySection.values()].reduce((n, l) => n + l.length, 0),
+    [distribution],
+  );
+
+  const totalMinutes = useMemo(
+    () => prepared.reduce((n, p) => n + readingMinutes(p.words), 0),
+    [prepared],
+  );
+
+  const overviewSources = useMemo(
+    () => webSearchResults.filter((r) => r.concept === "_paper_overview"),
+    [webSearchResults],
+  );
+
+  const activePrepared = useMemo(
+    () => prepared.find((p) => p.section.id === activeSectionId) ?? prepared[0] ?? null,
+    [prepared, activeSectionId],
+  );
+
+  const railData = useMemo(() => {
+    if (!activePrepared) return null;
+    return {
+      media: distribution.bySection.get(activePrepared.section.id) ?? [],
+      labs: labsForSection(activePrepared.section, labs),
+      sources: sourcesForSection(activePrepared.section, webSearchResults),
+    };
+  }, [activePrepared, distribution, labs, webSearchResults]);
+
+  /* ── Scroll tracking ────────────────────────────────────────── */
+  const entries = useRef<Map<string, IntersectionObserverEntry>>(new Map());
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (list) => {
+        for (const e of list) entries.current.set(e.target.id, e);
+        let top: string | null = null;
+        let topY = Infinity;
+        entries.current.forEach((e, id) => {
+          if (e.isIntersecting && e.boundingClientRect.top < topY) {
+            topY = e.boundingClientRect.top;
+            top = id.replace("section-", "");
+          }
+        });
+        if (top) setActiveSectionId(top);
+        // Anything whose bottom has passed the viewport top counts as read.
+        setReadIds((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          entries.current.forEach((e, id) => {
+            if (!e.isIntersecting && e.boundingClientRect.bottom < 0) {
+              const sid = id.replace("section-", "");
+              if (!next.has(sid)) {
+                next.add(sid);
+                changed = true;
+              }
+            }
+          });
+          return changed ? next : prev;
+        });
+      },
+      { rootMargin: "-72px 0px -45% 0px", threshold: 0 },
+    );
+    document.querySelectorAll("[data-section-id]").forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [prepared.length]);
+
+  useEffect(() => {
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const doc = document.documentElement;
+        const max = doc.scrollHeight - window.innerHeight;
+        setProgress(max > 0 ? Math.min(1, window.scrollY / max) : 0);
+      });
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  /* Lock body scroll while the mobile contents sheet is open */
+  useEffect(() => {
+    if (!navOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNavOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [navOpen]);
+
+  /* ── Actions ────────────────────────────────────────────────── */
+  const handleRequestMedia = useCallback(
+    async (concept: string, type: MediaRequestType, sectionIndex: number) => {
+      setPendingMedia((p) => ({ ...p, [concept]: type }));
+      try {
+        if (type === "image") {
+          const section = sections.find((s) => s.section_index === sectionIndex);
+          const img = await generateManualImage(
+            paperId,
+            concept,
+            (section?.simplified_text ?? "").slice(0, 2000),
+          );
+          upsertImage(img);
+        } else if (type === "canvas") {
+          upsertCanvas(await generateManualCanvas(paperId, sectionIndex, concept));
+        } else {
+          upsertVideo(await generateManualVideo(paperId, concept));
+        }
+      } catch {
+        toast(`Could not generate ${type} for "${concept}"`, "error");
+      } finally {
+        setPendingMedia((p) => {
+          const next = { ...p };
+          delete next[concept];
+          return next;
+        });
+      }
+    },
+    [paperId, sections, upsertImage, upsertCanvas, upsertVideo, toast],
+  );
+
+  const handleRegenerateImage = useCallback(
+    async (concept: string) => {
+      try {
+        upsertImage(await regenerateImage(paperId, concept));
+      } catch {
+        toast("Could not regenerate image", "error");
+      }
+    },
+    [paperId, upsertImage, toast],
+  );
+
+  const handleDownloadLab = useCallback(
+    async (lab: GeneratedLab) => {
+      setDownloadingLabId(lab.id);
+      try {
+        const blob = await downloadLab(paperId, lab.id);
+        triggerBlobDownload(blob, `${lab.title.replace(/\s+/g, "_")}.ipynb`);
+      } catch {
+        toast("Could not download notebook", "error");
+      } finally {
+        setDownloadingLabId(null);
+      }
+    },
+    [paperId, toast],
+  );
+
+  const handleDownloadAllLabs = useCallback(async () => {
+    setDownloadingAll(true);
+    try {
+      triggerBlobDownload(await downloadLabsZip(paperId), "labs.zip");
+    } catch {
+      toast("Could not download notebooks", "error");
+    } finally {
+      setDownloadingAll(false);
+    }
+  }, [paperId, toast]);
+
+  const handleAsk = useCallback((question: string, sectionTitle: string) => {
+    setChatRequest({ id: Date.now(), text: question, sectionTitle });
+  }, []);
+
+  /* ── Render ─────────────────────────────────────────────────── */
+  const isEmpty = prepared.length === 0;
+  const hasAppendix =
+    labs.length > 0 ||
+    webSearchResults.some((r) => !r.concept.startsWith("_")) ||
+    distribution.orphans.length > 0;
+
+  const nav = (
+    <ContentsNav
+      sections={prepared}
+      activeId={activeSectionId ?? prepared[0]?.section.id ?? null}
+      readIds={readIds}
+      figureCounts={figureCounts}
+      hasLabs={labs.length > 0}
+      hasSources={webSearchResults.some((r) => !r.concept.startsWith("_"))}
+      hasExtraFigures={distribution.orphans.length > 0}
+      onNavigate={(sectionId) => {
+        setNavOpen(false);
+        if (sectionId) setActiveSectionId(sectionId);
+      }}
+    />
   );
 
   return (
-    <div className="min-h-screen bg-background text-zinc-100">
-      {/* Top Bar */}
-      <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-sm border-b border-zinc-800">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              onClick={() => router.push("/")}
-              className="shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <h1 className="text-lg font-bold truncate">
-              {paper?.title ?? "Processing…"}
-            </h1>
-          </div>
+    <div className="min-h-screen bg-page text-ink">
+      {/* Reading progress */}
+      <div
+        aria-hidden
+        className="fixed top-0 left-0 right-0 h-[2px] z-50 bg-transparent"
+      >
+        <div
+          className="h-full bg-accent transition-[width] duration-150 ease-out"
+          style={{ width: `${progress * 100}%` }}
+        />
+      </div>
+
+      {/* Top bar */}
+      <header className="sticky top-0 z-30 bg-page/85 backdrop-blur-md border-b border-rule">
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 h-14 flex items-center gap-3 font-sans">
+          <button
+            onClick={() => router.push("/")}
+            className="shrink-0 inline-flex items-center gap-1.5 text-[13px] text-ink-muted hover:text-ink transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" aria-hidden />
+            <span className="hidden sm:inline">Library</span>
+          </button>
 
           <button
-            onClick={() => setShowPdf(!showPdf)}
-            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition-colors
-              ${
-                showPdf
-                  ? "bg-indigo-600 text-white"
-                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-              }`}
+            onClick={() => setNavOpen(true)}
+            className="lg:hidden shrink-0 inline-flex items-center gap-1.5 text-[13px] text-ink-muted hover:text-ink transition-colors"
+            aria-label="Open contents"
           >
-            {showPdf ? "Hide PDF" : "Toggle PDF"}
+            <List className="w-4 h-4" aria-hidden />
+            Contents
+          </button>
+
+          <p className="min-w-0 flex-1 truncate text-[13.5px] text-ink-muted">
+            <span className="text-ink">{paper?.title ?? "Loading…"}</span>
+            {activePrepared && (
+              <span className="hidden md:inline">
+                {" "}
+                <span className="text-ink-faint">/</span> {activePrepared.number}. {activePrepared.title}
+              </span>
+            )}
+          </p>
+
+          <PipelineStatus agents={agentJobs} />
+
+          <button
+            onClick={() => setChatOpen(true)}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-rule px-3 py-1.5 text-xs text-ink-muted hover:text-ink hover:border-rule-strong transition-colors"
+          >
+            <MessageSquare className="w-3.5 h-3.5" aria-hidden />
+            <span className="hidden sm:inline">Ask</span>
           </button>
         </div>
       </header>
 
-      {/* Status Bar */}
-      <div className="max-w-6xl mx-auto px-4 py-3">
-        <div className="flex items-center gap-4 flex-wrap">
-          <StatusBadge
-            label="sections"
-            count={sections.length}
-            color="bg-indigo-500"
-          />
-          <StatusBadge
-            label="images"
-            count={images.length}
-            color="bg-blue-500"
-          />
-          <StatusBadge
-            label="canvases"
-            count={canvases.length}
-            color="bg-purple-500"
-          />
-          <StatusBadge
-            label="videos"
-            count={videos.length}
-            color="bg-amber-500"
-          />
-          <StatusBadge
-            label="labs"
-            count={labs.length}
-            color="bg-emerald-500"
-          />
-
-          {status === "running" && (
-            <div className="flex items-center gap-1.5 text-xs ml-auto">
-              <Spinner size={12} />
-              <span className="text-indigo-400">Processing…</span>
-            </div>
-          )}
-          {status === "done" && (
-            <span className="text-xs text-emerald-400 ml-auto flex items-center gap-1">
-              <Check className="w-3.5 h-3.5" />
-              Complete
-            </span>
-          )}
-        </div>
-
-        {error && (
-          <div className="mt-3 rounded-lg bg-red-900/30 border border-red-800 px-4 py-2 text-sm text-red-300">
+      {error && (
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 mt-4 font-sans">
+          <div className="rounded-md border border-amber-700/50 bg-amber-900/20 px-4 py-2.5 text-[13px] text-amber-200">
             {error}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Main Content with Sidebar TOC */}
-      <div className="max-w-6xl mx-auto px-4 pb-12 flex gap-6">
-        <SidebarTOC
-          sections={sortedSections}
-          activeSectionId={activeSectionId}
-        />
+      {/* Three columns: contents · reading · margin notes */}
+      <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)] xl:grid-cols-[13.5rem_minmax(0,1fr)_17rem] lg:gap-10 xl:gap-12">
+        {/* Contents */}
+        <div className="hidden lg:block">
+          <div className="sticky top-14 max-h-[calc(100vh-3.5rem)] overflow-y-auto scrollbar-thin py-8 pr-1">
+            {isEmpty ? <SkeletonText lines={8} /> : nav}
+          </div>
+        </div>
 
-        <main className="min-w-0 flex-1">
-          {showPdf && (
-            <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-center">
-              <p className="text-sm text-zinc-500">
-                PDF viewer placeholder — original paper PDF will be displayed
-                here
-              </p>
-            </div>
-          )}
+        {/* Reading column */}
+        <main className="min-w-0 py-8 lg:py-10">
+          <div className="max-w-[70ch] mx-auto xl:mx-0">
+            {isEmpty ? (
+              <EmptyState status={status} agents={agentJobs} />
+            ) : (
+              <>
+                <FrontMatter
+                  paper={paper}
+                  overview={distribution.overview}
+                  overviewSources={overviewSources}
+                  sectionCount={prepared.length}
+                  figureCount={totalFigures}
+                  totalMinutes={totalMinutes}
+                />
 
-          <AnimatePresence mode="popLayout">
-            <OutputTimeline
-              paperId={paperId}
-              sessionId={sessionId}
-              sections={sortedSections}
-              images={images}
-              canvases={canvases}
-              videos={videos}
-              labs={labs}
-              webSearchResults={webSearchResults}
-              onNewImage={upsertImage}
-              onNewCanvas={upsertCanvas}
-              onNewVideo={upsertVideo}
-              onVideoUpdate={handleVideoUpdate}
-            />
-          </AnimatePresence>
+                {prepared.map((p, i) => {
+                  const media = distribution.bySection.get(p.section.id) ?? [];
+                  const article = (
+                    <SectionArticle
+                      key={p.section.id}
+                      prepared={p}
+                      media={media}
+                      onRegenerateImage={handleRegenerateImage}
+                      onVideoUpdate={upsertVideo}
+                      footer={
+                        <SectionRail
+                          compact
+                          prepared={p}
+                          media={media}
+                          labs={labsForSection(p.section, labs)}
+                          sources={sourcesForSection(p.section, webSearchResults)}
+                          pending={pendingMedia}
+                          onRequestMedia={handleRequestMedia}
+                          onDownloadLab={handleDownloadLab}
+                          downloadingLabId={downloadingLabId}
+                          onAsk={handleAsk}
+                        />
+                      }
+                    />
+                  );
+                  if (i < 3) return article;
+                  return (
+                    <LazySection
+                      key={p.section.id}
+                      id={p.section.id}
+                      estimatedHeight={Math.max(400, p.words * 0.8)}
+                    >
+                      {article}
+                    </LazySection>
+                  );
+                })}
+
+                {status === "running" && (
+                  <div className="font-sans text-[13px] text-ink-faint py-6 flex items-center gap-2">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                    More sections are being written…
+                  </div>
+                )}
+
+                {hasAppendix && (
+                  <div className="pt-6">
+                    <Appendix
+                      labs={labs}
+                      sources={webSearchResults}
+                      extraFigures={distribution.orphans}
+                      onDownloadLab={handleDownloadLab}
+                      onDownloadAllLabs={handleDownloadAllLabs}
+                      downloadingLabId={downloadingLabId}
+                      downloadingAll={downloadingAll}
+                      onRegenerateImage={handleRegenerateImage}
+                      onVideoUpdate={upsertVideo}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </main>
+
+        {/* Margin notes */}
+        <div className="hidden xl:block">
+          <div className="sticky top-14 max-h-[calc(100vh-3.5rem)] overflow-y-auto scrollbar-thin py-10 pl-1">
+            {activePrepared && railData ? (
+              <SectionRail
+                key={activePrepared.section.id}
+                prepared={activePrepared}
+                media={railData.media}
+                labs={railData.labs}
+                sources={railData.sources}
+                pending={pendingMedia}
+                onRequestMedia={handleRequestMedia}
+                onDownloadLab={handleDownloadLab}
+                downloadingLabId={downloadingLabId}
+                onAsk={handleAsk}
+              />
+            ) : (
+              <SkeletonText lines={6} />
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Mobile contents sheet */}
+      {navOpen && (
+        <div className="lg:hidden fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Contents">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setNavOpen(false)} />
+          <div className="absolute inset-y-0 left-0 w-[min(88vw,20rem)] bg-page border-r border-rule overflow-y-auto p-4 pt-3">
+            <div className="flex justify-end mb-1">
+              <button
+                onClick={() => setNavOpen(false)}
+                aria-label="Close contents"
+                className="p-1.5 rounded text-ink-muted hover:text-ink"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {nav}
+          </div>
+        </div>
+      )}
+
+      <ChatPanel
+        paperId={paperId}
+        sessionId={sessionId}
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        hideTrigger
+        request={chatRequest}
+      />
+    </div>
+  );
+}
+
+/* ── Empty / generating state ────────────────────────────────── */
+
+function EmptyState({
+  status,
+  agents,
+}: {
+  status: "loading" | "running" | "done";
+  agents: AgentStatusEvent[];
+}) {
+  if (status === "loading") {
+    return (
+      <div className="space-y-10 pt-6" aria-busy>
+        <div className="space-y-4">
+          <div className="skeleton-shimmer h-3 w-32 rounded" />
+          <div className="skeleton-shimmer h-12 w-4/5 rounded" />
+          <div className="skeleton-shimmer h-12 w-3/5 rounded" />
+        </div>
+        <SkeletonText lines={6} />
+        <SkeletonText lines={5} />
+      </div>
+    );
+  }
+  if (status === "running") {
+    return (
+      <div className="pt-6 font-sans">
+        <p className="font-serif text-[2rem] font-semibold text-ink leading-tight">
+          Writing your reading…
+        </p>
+        <p className="mt-3 text-[14px] text-ink-muted max-w-[52ch]">
+          Sections appear here as soon as each one is finished. Figures, labs and sources
+          follow.
+        </p>
+        <div className="mt-8">
+          <AgentActivityPanel agents={agents} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="pt-6 font-sans">
+      <p className="font-serif text-[2rem] font-semibold text-ink leading-tight">
+        Nothing to read yet
+      </p>
+      <p className="mt-3 text-[14px] text-ink-muted max-w-[52ch]">
+        Generation finished without producing any sections. Go back to the library and start
+        this paper again.
+      </p>
     </div>
   );
 }

@@ -23,6 +23,7 @@ Code requirements:
 - Reproducible: set random seeds (np.random.seed(42), torch.manual_seed(42))
 - All code cells should be independent — no cross-cell state dependencies
 
+Keep notebooks concise: 2 experiments max, minimal markdown prose.
 Return ONLY valid nbformat v4 JSON. No markdown fences. No explanation."""
 
 

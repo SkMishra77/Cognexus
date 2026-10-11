@@ -60,7 +60,7 @@ export async function ingestArxiv(url: string): Promise<IngestResult> {
 export async function getConcepts(
   paperId: string
 ): Promise<{ concepts: Concept[] }> {
-  return apiFetch<{ concepts: Concept[] }>(`/concepts/${paperId}`);
+  return apiFetch<{ concepts: Concept[] }>(`/ingest/concepts/${paperId}`);
 }
 
 export async function submitKnowledgeProfile(
@@ -77,11 +77,11 @@ export async function submitKnowledgeProfile(
 /* ── Papers ──────────────────────────────────────────────────────── */
 
 export async function getPapers(): Promise<{ papers: Paper[] }> {
-  return apiFetch<{ papers: Paper[] }>("/papers");
+  return apiFetch<{ papers: Paper[] }>("/output/papers");
 }
 
 export async function getPaperDetail(paperId: string): Promise<Paper> {
-  return apiFetch<Paper>(`/papers/${paperId}`);
+  return apiFetch<Paper>(`/output/papers/${paperId}`);
 }
 
 /* ── Output Snapshot ─────────────────────────────────────────────── */
@@ -94,6 +94,22 @@ export interface OutputSnapshot {
   videos: VideoJob[];
   labs: GeneratedLab[];
   status: "pending" | "running" | "done" | "error";
+}
+
+export interface AgentJob {
+  id: string;
+  agent_type: string;
+  status: string;
+  created_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  metadata: { phase?: number; label?: string; concept?: string } | null;
+}
+
+export async function getAgentJobs(
+  paperId: string
+): Promise<{ agents: AgentJob[] }> {
+  return apiFetch<{ agents: AgentJob[] }>(`/output/${paperId}/agents`);
 }
 
 export async function getOutputSnapshot(

@@ -4,6 +4,7 @@ import os
 from typing import AsyncGenerator
 
 import aioboto3
+from botocore.config import Config
 
 
 class BedrockClient:
@@ -20,11 +21,18 @@ class BedrockClient:
         if bedrock_token:
             os.environ["AWS_BEARER_TOKEN_BEDROCK"] = bedrock_token
 
-        self._session = aioboto3.Session()
+        self._session = aioboto3.Session(
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+        self._bedrock_config = Config(
+            read_timeout=300,
+            connect_timeout=10,
+            retries={"max_attempts": 2, "mode": "adaptive"},
+        )
 
     async def invoke_claude(self, system: str, user: str, max_tokens: int = 4096) -> str:
         """Send a single prompt to Claude and return the full response text."""
-        async with self._session.client("bedrock-runtime") as client:
+        async with self._session.client("bedrock-runtime", config=self._bedrock_config) as client:
             body = json.dumps(
                 {
                     "anthropic_version": "bedrock-2023-05-31",
@@ -44,7 +52,7 @@ class BedrockClient:
 
     async def stream_claude(self, system: str, user: str, max_tokens: int = 4096) -> AsyncGenerator[str, None]:
         """Stream Claude's response, yielding text deltas as they arrive."""
-        async with self._session.client("bedrock-runtime") as client:
+        async with self._session.client("bedrock-runtime", config=self._bedrock_config) as client:
             body = json.dumps(
                 {
                     "anthropic_version": "bedrock-2023-05-31",
@@ -68,7 +76,7 @@ class BedrockClient:
 
     async def generate_image(self, prompt: str, seed: int = 42) -> bytes:
         """Generate an image using Nova Canvas and return raw PNG bytes."""
-        async with self._session.client("bedrock-runtime") as client:
+        async with self._session.client("bedrock-runtime", config=self._bedrock_config) as client:
             body = json.dumps(
                 {
                     "taskType": "TEXT_IMAGE",
@@ -95,7 +103,7 @@ class BedrockClient:
 
     async def embed_text(self, text: str) -> list[float]:
         """Embed a single text string and return a 1024-dim float vector."""
-        async with self._session.client("bedrock-runtime") as client:
+        async with self._session.client("bedrock-runtime", config=self._bedrock_config) as client:
             body = json.dumps(
                 {
                     "inputText": text,

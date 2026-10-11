@@ -8,7 +8,7 @@ import asyncio
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-import fitz  # PyMuPDF
+import pymupdf
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
@@ -30,7 +30,7 @@ def _is_heading(line: str, block_flags: int | None = None) -> bool:
     return False
 
 
-def _extract_doi(doc: fitz.Document, first_page_text: str) -> str | None:
+def _extract_doi(doc: pymupdf.Document, first_page_text: str) -> str | None:
     """Try metadata first, then regex on first-page text."""
     meta = doc.metadata or {}
     for key in ("doi", "subject", "keywords"):
@@ -46,13 +46,13 @@ def _extract_doi(doc: fitz.Document, first_page_text: str) -> str | None:
 
 def _parse_pdf_sync(file_bytes: bytes) -> dict:
     """Synchronous PDF parsing — called via run_in_executor."""
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    doc = pymupdf.open(stream=file_bytes, filetype="pdf")
 
     full_lines: list[str] = []
     block_data: list[tuple[str, bool]] = []
 
     for page in doc:
-        blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+        blocks = page.get_text("dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE)["blocks"]
         for block in blocks:
             if block.get("type") != 0:  # skip images
                 continue

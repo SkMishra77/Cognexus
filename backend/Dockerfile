@@ -8,7 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango1.0-dev \
     ffmpeg \
     texlive-latex-base \
+    texlive-latex-extra \
     texlive-fonts-recommended \
+    texlive-latex-recommended \
+    dvisvgm \
+    cm-super \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -20,4 +24,4 @@ RUN mkdir -p /app/static /app/tmp
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-exclude", "static/*", "--reload-exclude", "tmp/*"]

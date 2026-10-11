@@ -37,11 +37,27 @@ interface ChatEntry {
   assets: ChatAsset[];
   streaming: boolean;
   createdAt: number;
+  /** Section the question was scoped to, if any. */
+  context?: string;
+}
+
+/** A question pushed in from outside the panel (e.g. the section rail). */
+export interface ChatRequest {
+  id: number;
+  text: string;
+  sectionTitle?: string;
 }
 
 interface Props {
   paperId: string;
   sessionId: string;
+  /** Controlled open state. When omitted the panel manages itself. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Hide the floating launcher (the page supplies its own trigger). */
+  hideTrigger?: boolean;
+  /** Send this question as soon as it changes identity. */
+  request?: ChatRequest | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -113,8 +129,23 @@ const drawerVariants = {
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function ChatPanel({ paperId, sessionId }: Props) {
-  const [open, setOpen] = useState(false);
+export default function ChatPanel({
+  paperId,
+  sessionId,
+  open: openProp,
+  onOpenChange,
+  hideTrigger = false,
+  request = null,
+}: Props) {
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = useCallback(
+    (v: boolean) => {
+      setOpenState(v);
+      onOpenChange?.(v);
+    },
+    [onOpenChange],
+  );
   const [selectedTypes, setSelectedTypes] = useState<ResponseType[]>(loadSavedTypes);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState("");
@@ -163,8 +194,7 @@ export default function ChatPanel({ paperId, sessionId }: Props) {
     setSending(false);
   }, []);
 
-  const handleSend = useCallback(() => {
-    const text = input.trim();
+  const send = useCallback((text: string, context?: string) => {
     if (!text || sending) return;
 
     const now = Date.now();
@@ -176,7 +206,11 @@ export default function ChatPanel({ paperId, sessionId }: Props) {
       assets: [],
       streaming: false,
       createdAt: now,
+      context,
     };
+
+    // The API has no section parameter; scope the question in the prompt.
+    const outbound = context ? `Regarding the section "${context}": ${text}` : text;
 
     const assistantId = `assistant-${now}`;
     const assistantEntry: ChatEntry = {
@@ -195,7 +229,7 @@ export default function ChatPanel({ paperId, sessionId }: Props) {
     cleanupRef.current = subscribeToChat(
       paperId,
       sessionId,
-      text,
+      outbound,
       selectedTypes,
       {
         onTextDelta: (delta) => {
@@ -267,7 +301,20 @@ export default function ChatPanel({ paperId, sessionId }: Props) {
         },
       }
     );
-  }, [input, sending, paperId, sessionId, selectedTypes]);
+  }, [sending, paperId, sessionId, selectedTypes]);
+
+  const handleSend = useCallback(() => {
+    send(input.trim());
+  }, [input, send]);
+
+  /* External requests (from the section rail) */
+  const lastRequestId = useRef<number | null>(null);
+  useEffect(() => {
+    if (!request || request.id === lastRequestId.current) return;
+    lastRequestId.current = request.id;
+    setOpen(true);
+    send(request.text.trim(), request.sectionTitle);
+  }, [request, send, setOpen]);
 
   const unreadCount = useMemo(
     () => messages.filter((m) => m.role === "assistant" && m.text).length,
@@ -277,23 +324,25 @@ export default function ChatPanel({ paperId, sessionId }: Props) {
   return (
     <>
       {/* Floating trigger button */}
-      <motion.button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14
-                   rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-900/40
-                   hover:bg-indigo-500 transition-colors"
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        aria-label="Open chat"
-        style={{ display: open ? "none" : "flex" }}
-      >
-        <MessageCircle size={24} />
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-[10px] font-bold">
-            {unreadCount > 9 ? "9+" : unreadCount}
-          </span>
-        )}
-      </motion.button>
+      {!hideTrigger && (
+        <motion.button
+          onClick={() => setOpen(true)}
+          className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14
+                     rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-900/40
+                     hover:bg-indigo-500 transition-colors"
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          aria-label="Open chat"
+          style={{ display: open ? "none" : "flex" }}
+        >
+          <MessageCircle size={24} />
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-[10px] font-bold">
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </motion.button>
+      )}
 
       {/* Drawer overlay */}
       <AnimatePresence>
@@ -406,6 +455,13 @@ export default function ChatPanel({ paperId, sessionId }: Props) {
                             : "bg-zinc-800 text-zinc-200"
                         }`}
                     >
+                      {/* Section scope */}
+                      {msg.context && (
+                        <p className="text-[11px] text-indigo-200/70 -mb-1 truncate">
+                          About: {msg.context}
+                        </p>
+                      )}
+
                       {/* Text content */}
                       {msg.text && msg.role === "user" && (
                         <div className="text-sm leading-relaxed whitespace-pre-wrap">

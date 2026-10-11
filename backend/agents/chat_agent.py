@@ -123,9 +123,12 @@ class ChatAgent:
                 agent = ImageAgent(self.paper_id, c, self.db, self.bedrock)
                 img = await agent.run_for_chat()
                 return {
+                    "id": str(img.id),
+                    "paper_id": str(img.paper_id),
+                    "concept": img.concept,
                     "image_base64": img.image_base64,
                     "caption": img.caption,
-                    "id": str(img.id),
+                    "seed": img.seed,
                 }
 
             media_tasks["image"] = asyncio.create_task(_gen_image())
@@ -143,8 +146,12 @@ class ChatAgent:
                 )
                 canvas = await agent.run_for_chat()
                 return {
-                    "elements": canvas.elements_json,
                     "id": str(canvas.id),
+                    "paper_id": str(canvas.paper_id),
+                    "section_index": canvas.section_index,
+                    "mode": canvas.mode,
+                    "elements_json": canvas.elements_json,
+                    "caption": canvas.caption,
                 }
 
             media_tasks["canvas"] = asyncio.create_task(_gen_canvas())
@@ -159,8 +166,15 @@ class ChatAgent:
                 agent = VideoAgent(self.paper_id, c, self.db, self.bedrock)
                 vj = await agent.run_for_chat()
                 return {
-                    "job_id": str(vj.id),
+                    "id": str(vj.id),
+                    "paper_id": str(vj.paper_id),
                     "concept": vj.concept,
+                    "status": vj.status,
+                    "mp4_path": vj.mp4_path,
+                    "manim_script": None,
+                    "error": vj.error,
+                    "caption": vj.caption,
+                    "created_at": str(vj.created_at) if vj.created_at else None,
                 }
 
             media_tasks["video"] = asyncio.create_task(_gen_video())
@@ -176,7 +190,7 @@ class ChatAgent:
                     chat_assets.append({"type": "canvas", "asset_id": result["id"]})
                     yield {"event": "chat_canvas", "data": result}
                 elif media_type == "video":
-                    chat_assets.append({"type": "video", "asset_id": result["job_id"]})
+                    chat_assets.append({"type": "video", "asset_id": result["id"]})
                     yield {"event": "chat_video_queued", "data": result}
             except Exception:
                 pass  # Fail-isolated: don't break chat for a media failure

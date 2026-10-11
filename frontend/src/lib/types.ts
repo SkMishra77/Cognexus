@@ -52,8 +52,8 @@ export interface SimplifiedSection {
   title: string | null;
   simplified_text: string;
   key_concepts: string[] | null;
-  equations: Record<string, string> | null;
-  media_plan: Record<string, string[]> | null;
+  equations: Record<string, string | { latex?: string; plain_english?: string }> | null;
+  media_plan: Record<string, string[] | { types: string[]; caption?: string; paragraph_hint?: string }> | null;
 }
 
 export interface GeneratedImage {
@@ -71,16 +71,18 @@ export interface GeneratedCanvas {
   section_index: number;
   mode: string | null;
   elements_json: Record<string, unknown> | null;
+  caption: string | null;
 }
 
 export interface VideoJob {
   id: string;
   paper_id: string;
   concept: string;
-  status: "pending" | "running" | "done" | "error";
+  status: "pending" | "running" | "queued" | "rendering" | "done" | "failed" | "error";
   mp4_path: string | null;
   manim_script: string | null;
   error: string | null;
+  caption: string | null;
   created_at: string;
 }
 

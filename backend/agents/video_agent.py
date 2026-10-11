@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from db.models import AgentJob, VideoJob
 from prompts.manim_generation import SYSTEM, build_user
@@ -52,11 +53,13 @@ class VideoAgent:
         concept_name: str,
         db_session: AsyncSession,
         bedrock: BedrockClient,
+        caption: str | None = None,
     ) -> None:
         self.paper_id = paper_id
         self.concept_name = concept_name
         self.db = db_session
         self.bedrock = bedrock
+        self.caption = caption
 
     async def run(self) -> VideoJob:
         """Generate Manim script, validate, persist, and enqueue rendering."""
@@ -64,11 +67,17 @@ class VideoAgent:
             paper_id=self.paper_id,
             agent_type="video",
             status="running",
+            job_metadata={"phase": 2, "label": f"Video: {self.concept_name}"},
         )
         self.db.add(job)
         await self.db.flush()
 
         try:
+            job.job_metadata = {**(job.job_metadata or {}), "progress": "retrieving context"}
+            flag_modified(job, "job_metadata")
+            await self.db.flush()
+            await self.db.commit()
+
             chunks = await retrieve_relevant_chunks(
                 query=self.concept_name,
                 paper_id=self.paper_id,
@@ -79,8 +88,15 @@ class VideoAgent:
             )
             context = "\n\n".join(c.content for c in chunks)
 
+            job.job_metadata = {**(job.job_metadata or {}), "progress": "generating manim script"}
+            flag_modified(job, "job_metadata")
+            await self.db.flush()
+            await self.db.commit()
+
             user_prompt = build_user(self.concept_name, context=context)
-            raw_script = await self.bedrock.invoke_claude(SYSTEM, user_prompt, max_tokens=8192)
+            if self.caption:
+                user_prompt += f"\n\nCaption/focus: {self.caption}"
+            raw_script = await self.bedrock.invoke_claude(SYSTEM, user_prompt, max_tokens=16384)
             script = _clean_script(raw_script)
 
             _validate_script(script)
@@ -90,6 +106,7 @@ class VideoAgent:
                 concept=self.concept_name,
                 status="queued",
                 manim_script=script,
+                caption=self.caption,
             )
             self.db.add(video_job)
             await self.db.flush()
@@ -101,7 +118,7 @@ class VideoAgent:
 
                 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
                 redis_conn = Redis.from_url(redis_url)
-                q = Queue(connection=redis_conn)
+                q = Queue("manim", connection=redis_conn)
                 q.enqueue(
                     "workers.video_worker.render_manim",
                     str(video_job.id),
@@ -158,7 +175,7 @@ class VideoAgent:
 
             redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
             redis_conn = Redis.from_url(redis_url)
-            q = Queue(connection=redis_conn)
+            q = Queue("manim", connection=redis_conn)
             q.enqueue(
                 "workers.video_worker.render_manim",
                 str(video_job.id),

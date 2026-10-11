@@ -9,9 +9,12 @@ Rules:
 - Use ONLY these element types: rectangle, ellipse, arrow, text, diamond.
 - Each element MUST have these fields:
   id (uuid string), type, x (number), y (number), width (number), height (number), \
-strokeColor ("#1e1e2e"), backgroundColor ("transparent" or a hex), strokeWidth (2), \
+strokeColor ("#f4f4f5"), backgroundColor ("transparent" or a hex), strokeWidth (2), \
 roughness (0), opacity (100).
 - Text elements additionally need: text (string), fontSize (20), fontFamily (1).
+- Use dark strokeColor ("#18181b") for text placed inside shapes with light backgrounds. \
+Use light strokeColor ("#f4f4f5") for standalone text, shape outlines, and arrows. \
+Use saturated (not pastel) background colors for shapes so they contrast with the dark canvas.
 - Arrow elements need: points [[x1,y1],[x2,y2]], startBinding/endBinding with elementId.
 - Use arrows to show direction of flow. Label arrows with short action verbs.
 - Layout: left-to-right for sequential processes, top-to-bottom for hierarchies.

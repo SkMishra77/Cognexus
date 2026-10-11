@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 aioboto3
 asyncpg
+psycopg2-binary
 sqlalchemy[asyncio]
 alembic
 greenlet

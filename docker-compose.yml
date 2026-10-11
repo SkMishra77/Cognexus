@@ -1,7 +1,8 @@
 services:
   frontend:
-    build: ./frontend
-    command: npm run dev
+    build:
+      context: ./frontend
+      target: builder
     ports:
       - "3000:3000"
     volumes:
@@ -9,6 +10,7 @@ services:
       - /app/node_modules
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+    command: npm run dev
 
   backend:
     build: ./backend

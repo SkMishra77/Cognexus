@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from db.models import AgentJob, GeneratedCanvas
 from prompts.canvas_generation import SYSTEM, build_user
@@ -79,6 +80,7 @@ class CanvasAgent:
         mode: str = "section",
         db: AsyncSession | None = None,
         bedrock: BedrockClient | None = None,
+        caption: str | None = None,
     ) -> None:
         self.paper_id = paper_id
         self.section_index = section_index
@@ -86,6 +88,7 @@ class CanvasAgent:
         self.mode = mode
         self.db = db
         self.bedrock = bedrock
+        self.caption = caption
 
     async def _generate_elements(self, context: str) -> list[dict]:
         """Call Claude to generate elements, retrying once on parse failure."""
@@ -106,48 +109,63 @@ class CanvasAgent:
 
     async def run(self) -> GeneratedCanvas:
         """Generate a canvas and persist it. Creates and updates an AgentJob."""
-        job = AgentJob(
-            paper_id=self.paper_id,
-            agent_type="canvas",
-            status="running",
-        )
-        self.db.add(job)
-        await self.db.flush()
-
-        try:
-            source = "raw" if self.mode == "overview" else "simplified"
-            query = self.concept or "paper overview architecture"
-            chunks = await retrieve_relevant_chunks(
-                query=query,
+        with self.db.no_autoflush:
+            phase = 1 if self.mode == "overview" else 2
+            label = "Diagram: Overview" if self.mode == "overview" else f"Diagram: {self.concept or 'Section'}"
+            job = AgentJob(
                 paper_id=self.paper_id,
-                source=source,
-                top_k=3,
-                db_session=self.db,
-                bedrock_client=self.bedrock,
+                agent_type="canvas",
+                status="running",
+                job_metadata={"phase": phase, "concept": self.concept, "label": label},
             )
-            context = "\n\n".join(c.content for c in chunks)
-
-            elements = await self._generate_elements(context)
-
-            row = GeneratedCanvas(
-                paper_id=self.paper_id,
-                section_index=self.section_index if self.section_index is not None else 0,
-                mode=self.mode,
-                elements_json=elements,
-            )
-            self.db.add(row)
-
-            job.status = "done"
-            job.completed_at = datetime.now(timezone.utc)
+            self.db.add(job)
             await self.db.flush()
-            return row
 
-        except Exception as e:
-            job.status = "failed"
-            job.error = str(e)[:2000]
-            job.completed_at = datetime.now(timezone.utc)
-            await self.db.flush()
-            raise
+            try:
+                job.job_metadata = {**(job.job_metadata or {}), "progress": "retrieving context"}
+                flag_modified(job, "job_metadata")
+                await self.db.flush()
+                await self.db.commit()
+
+                source = "raw" if self.mode == "overview" else "simplified"
+                query = self.concept or "paper overview architecture"
+                chunks = await retrieve_relevant_chunks(
+                    query=query,
+                    paper_id=self.paper_id,
+                    source=source,
+                    top_k=3,
+                    db_session=self.db,
+                    bedrock_client=self.bedrock,
+                )
+                context = "\n\n".join(c.content for c in chunks)
+
+                job.job_metadata = {**(job.job_metadata or {}), "progress": "generating diagram"}
+                flag_modified(job, "job_metadata")
+                await self.db.flush()
+                await self.db.commit()
+
+                elements = await self._generate_elements(context)
+
+                row = GeneratedCanvas(
+                    paper_id=self.paper_id,
+                    section_index=self.section_index if self.section_index is not None else 0,
+                    mode=self.mode,
+                    elements_json=elements,
+                    caption=self.caption,
+                )
+                self.db.add(row)
+
+                job.status = "done"
+                job.completed_at = datetime.now(timezone.utc)
+                await self.db.flush()
+                return row
+
+            except Exception as e:
+                job.status = "failed"
+                job.error = str(e)[:2000]
+                job.completed_at = datetime.now(timezone.utc)
+                await self.db.flush()
+                raise
 
     async def run_for_chat(self) -> GeneratedCanvas:
         """Convenience wrapper for chat-initiated canvas generation (no job row)."""

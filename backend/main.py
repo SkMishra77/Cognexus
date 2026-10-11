@@ -1,8 +1,11 @@
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 

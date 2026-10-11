@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
   --background: #0a0a0a;
@@ -22,6 +23,17 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-serif);
+
+  /* Reader palette: page, ink, rule, accent */
+  --color-page: #0a0a0a;
+  --color-ink: #ece9e2;
+  --color-ink-muted: #a3a09a;
+  --color-ink-faint: #6b6965;
+  --color-rule: #26262a;
+  --color-rule-strong: #3a3a40;
+  --color-accent: #818cf8;
+  --color-accent-deep: #6366f1;
 }
 
 body {
@@ -88,4 +100,169 @@ body {
 
 .animate-fade-in {
   animation: fade-in 0.3s ease-out forwards;
+}
+
+/* ── Reader (paper output page) ──────────────────────────────── */
+
+/* Long documents: let the browser skip layout for off-screen sections. */
+.reader-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1800px;
+}
+
+/* Body copy for simplified sections. Serif, generous measure. */
+.reading {
+  font-family: var(--font-serif), Georgia, "Times New Roman", serif;
+  font-size: 1.0625rem; /* 17px */
+  line-height: 1.75;
+  color: var(--color-ink);
+  font-variation-settings: "opsz" 17;
+}
+@media (min-width: 1024px) {
+  .reading {
+    font-size: 1.125rem; /* 18px */
+    line-height: 1.78;
+  }
+}
+.reading > :first-child {
+  margin-top: 0;
+}
+.reading p {
+  margin: 0 0 1.15em;
+}
+.reading h1,
+.reading h2,
+.reading h3,
+.reading h4 {
+  font-family: var(--font-serif), Georgia, serif;
+  color: var(--color-ink);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
+  margin: 2em 0 0.6em;
+}
+.reading h1 { font-size: 1.5em; }
+.reading h2 { font-size: 1.3em; }
+.reading h3 { font-size: 1.12em; }
+.reading h4 { font-size: 1em; font-style: italic; font-weight: 500; }
+.reading strong {
+  color: #fff;
+  font-weight: 600;
+}
+.reading em {
+  color: var(--color-ink);
+}
+.reading a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.reading ul,
+.reading ol {
+  margin: 0 0 1.15em;
+  padding-left: 1.4em;
+}
+.reading ul {
+  list-style: disc;
+}
+.reading ol {
+  list-style: decimal;
+}
+.reading li > ul,
+.reading li > ol {
+  margin-bottom: 0.3em;
+}
+.reading li {
+  margin: 0.3em 0;
+}
+.reading li::marker {
+  color: var(--color-ink-faint);
+}
+.reading blockquote {
+  margin: 1.4em 0;
+  padding: 0.1em 0 0.1em 1.1em;
+  border-left: 2px solid var(--color-rule-strong);
+  color: var(--color-ink-muted);
+  font-style: italic;
+}
+.reading hr {
+  border: 0;
+  border-top: 1px solid var(--color-rule);
+  margin: 2.2em 0;
+}
+.reading code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.82em;
+  background: #18181b;
+  color: #c7d2fe;
+  padding: 0.12em 0.4em;
+  border-radius: 4px;
+}
+.reading pre {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.8em;
+  line-height: 1.6;
+  background: #111113;
+  border: 1px solid var(--color-rule);
+  border-radius: 8px;
+  padding: 1em 1.1em;
+  overflow-x: auto;
+  margin: 1.3em 0;
+}
+.reading pre code {
+  background: none;
+  padding: 0;
+  color: #d4d4d8;
+  font-size: 1em;
+}
+.reading table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-size: 0.82em;
+  margin: 1.4em 0;
+}
+.reading th,
+.reading td {
+  text-align: left;
+  padding: 0.55em 0.75em;
+  border-bottom: 1px solid var(--color-rule);
+  vertical-align: top;
+}
+.reading th {
+  color: var(--color-ink-muted);
+  font-weight: 500;
+}
+.reading .katex-display {
+  margin: 1.4em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+.reading .katex {
+  font-size: 1.02em;
+  color: #e4e4ff;
+}
+
+/* Hide scrollbar but keep scroll for the contents nav */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #2a2a30;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

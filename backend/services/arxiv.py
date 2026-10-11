@@ -73,7 +73,7 @@ def _parse_atom_entry(xml_text: str) -> dict:
 async def _fetch_metadata(client: httpx.AsyncClient, arxiv_id: str) -> dict:
     """Fetch metadata from the arXiv Atom API."""
     url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
-    resp = await client.get(url)
+    resp = await client.get(url, follow_redirects=True)
     resp.raise_for_status()
     return _parse_atom_entry(resp.text)
 

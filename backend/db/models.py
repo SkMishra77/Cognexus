@@ -93,6 +93,7 @@ class AgentJob(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    job_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
 
     paper = relationship("Paper", back_populates="agent_jobs")
 
@@ -133,6 +134,7 @@ class GeneratedCanvas(Base):
     section_index: Mapped[int] = mapped_column(Integer, nullable=False)
     mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
     elements_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     paper = relationship("Paper", back_populates="generated_canvases")
 
@@ -147,6 +149,7 @@ class VideoJob(Base):
     mp4_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     manim_script: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     paper = relationship("Paper", back_populates="video_jobs")

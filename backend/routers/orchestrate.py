@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.orchestrator import run_all_agents
 from db.base import async_session, get_db
-from db.models import KnowledgeProfile, Paper
+from db.models import AgentJob, KnowledgeProfile, Paper
 from services.bedrock import BedrockClient
 
 router = APIRouter(prefix="/orchestrate", tags=["orchestrate"])
@@ -48,14 +48,23 @@ async def orchestrate(
     """Launch all agents for a paper based on the knowledge profile.
 
     Creates a KnowledgeProfile row and kicks off the two-phase orchestrator
-    as a background task.
+    as a background task. Rejects duplicate runs.
     """
-    # Verify paper exists
     paper_result = await db.execute(select(Paper).where(Paper.id == paper_id))
     if paper_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    # Create knowledge profile
+    existing = await db.execute(
+        select(AgentJob).where(
+            AgentJob.paper_id == paper_id,
+            AgentJob.status.in_(["running", "done"]),
+        )
+    )
+    if existing.scalars().first() is not None:
+        raise HTTPException(
+            status_code=409, detail="Pipeline already running or completed for this paper"
+        )
+
     profile = KnowledgeProfile(
         paper_id=paper_id,
         session_id=body.session_id,
@@ -64,7 +73,6 @@ async def orchestrate(
     db.add(profile)
     await db.commit()
 
-    # Launch agents in background
     background_tasks.add_task(_run_agents_background, paper_id, body.ratings)
 
     return OrchestrateResponse(message="agents launched")

@@ -61,13 +61,15 @@ export default function KnowledgeCheckInner() {
       try {
         const sessionId = crypto.randomUUID();
         await submitKnowledgeProfile(paperId, sessionId, allRatings);
-        router.push(`/paper/${paperId}/output`);
       } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to submit profile",
-        );
-        setSubmitting(false);
+        const msg = err instanceof Error ? err.message : "";
+        if (!msg.includes("409")) {
+          setError(msg || "Failed to submit profile");
+          setSubmitting(false);
+          return;
+        }
       }
+      router.push(`/paper/${paperId}/output`);
     },
     [paperId, router],
   );

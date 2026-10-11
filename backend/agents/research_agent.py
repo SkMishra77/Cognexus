@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from db.models import AgentJob, Chunk, WebSearchResult
 from services.bedrock import BedrockClient
@@ -44,27 +45,29 @@ class ResearchAgent:
 
     async def run(self) -> list[WebSearchResult]:
         """Execute web research and return saved WebSearchResult rows."""
-        job = AgentJob(
-            paper_id=self.paper_id,
-            agent_type="research",
-            status="running",
-        )
-        self.db.add(job)
-        await self.db.flush()
+        with self.db.no_autoflush:
+            job = AgentJob(
+                paper_id=self.paper_id,
+                agent_type="research",
+                status="running",
+                job_metadata={"phase": 1, "label": "Web Research"},
+            )
+            self.db.add(job)
+            await self.db.flush()
 
-        try:
-            results = await self._execute()
-            job.status = "done"
-            job.completed_at = datetime.now(timezone.utc)
-            return results
-        except Exception as e:
-            logger.error("ResearchAgent failed for paper %s: %s", self.paper_id, e)
-            job.status = "failed"
-            job.error = str(e)[:500]
-            job.completed_at = datetime.now(timezone.utc)
-            return []
+            try:
+                results = await self._execute(job)
+                job.status = "done"
+                job.completed_at = datetime.now(timezone.utc)
+                return results
+            except Exception as e:
+                logger.error("ResearchAgent failed for paper %s: %s", self.paper_id, e)
+                job.status = "failed"
+                job.error = str(e)[:500]
+                job.completed_at = datetime.now(timezone.utc)
+                return []
 
-    async def _execute(self) -> list[WebSearchResult]:
+    async def _execute(self, job: AgentJob) -> list[WebSearchResult]:
         """Build search tasks, run in parallel, chunk + embed results."""
         # Identify concepts the user does NOT know
         unknown_concepts = [
@@ -86,12 +89,28 @@ class ResearchAgent:
         paper_query = f"{self.paper_title} summary explained"
         search_tasks.append(("_paper_overview", paper_query, 2))
 
+        job.job_metadata = {
+            **(job.job_metadata or {}),
+            "progress": f"searching {len(search_tasks)} queries",
+        }
+        flag_modified(job, "job_metadata")
+        await self.db.flush()
+        await self.db.commit()
+
         # Run all Tavily searches in parallel
         search_coroutines = [
             tavily_search(query, max_results=max_r)
             for _, query, max_r in search_tasks
         ]
         search_results = await asyncio.gather(*search_coroutines, return_exceptions=True)
+
+        job.job_metadata = {
+            **(job.job_metadata or {}),
+            "progress": "embedding results",
+        }
+        flag_modified(job, "job_metadata")
+        await self.db.flush()
+        await self.db.commit()
 
         # Process results: chunk, embed, store
         all_web_results: list[WebSearchResult] = []

@@ -48,6 +48,22 @@ export interface MediaPlanEvent {
   media_plan: Record<string, string[]>;
 }
 
+export interface AgentMetadata {
+  phase?: number;
+  label?: string;
+  concept?: string;
+}
+
+export interface AgentStatusEvent {
+  id: string;
+  agent_type: string;
+  status: string;
+  created_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  metadata: AgentMetadata | null;
+}
+
 export interface OutputHandlers {
   onSimplification?: (section: SimplifiedSection) => void;
   onImage?: (image: GeneratedImage) => void;
@@ -57,6 +73,7 @@ export interface OutputHandlers {
   onLab?: (lab: GeneratedLab) => void;
   onResearch?: (result: WebSearchResult) => void;
   onMediaPlan?: (plan: MediaPlanEvent) => void;
+  onAgentStatus?: (agents: AgentStatusEvent[]) => void;
   onComplete?: () => void;
   onError?: (error: Event) => void;
 }
@@ -91,6 +108,7 @@ export function subscribeToOutput(
   listen("lab", handlers.onLab as (d: unknown) => void);
   listen("research", handlers.onResearch as (d: unknown) => void);
   listen("media_plan", handlers.onMediaPlan as (d: unknown) => void);
+  listen("agent_status", handlers.onAgentStatus as (d: unknown) => void);
   listen("complete", handlers.onComplete as (d: unknown) => void);
 
   es.onerror = (event) => {
@@ -150,6 +168,37 @@ export function subscribeToChat(
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let currentEvent = "";
+
+      const dispatch = (eventType: string, raw: string) => {
+        try {
+          const data = JSON.parse(raw);
+          switch (eventType) {
+            case "chat_text_delta":
+              handlers.onTextDelta?.(data.delta ?? data);
+              break;
+            case "chat_image":
+              handlers.onImage?.(data);
+              break;
+            case "chat_canvas":
+              handlers.onCanvas?.(data);
+              break;
+            case "chat_video_queued":
+              handlers.onVideoQueued?.(data);
+              break;
+            case "chat_video_done":
+              handlers.onVideoDone?.(data);
+              break;
+            case "chat_done":
+              handlers.onDone?.();
+              break;
+          }
+        } catch {
+          if (eventType === "chat_text_delta") {
+            handlers.onTextDelta?.(raw);
+          }
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -161,50 +210,14 @@ export function subscribeToChat(
 
         for (const line of lines) {
           if (line.startsWith("event: ")) {
-            const eventType = line.slice(7).trim();
-            const nextIdx = lines.indexOf(line) + 1;
-            if (nextIdx < lines.length && lines[nextIdx].startsWith("data: ")) {
-              const raw = lines[nextIdx].slice(6);
-              try {
-                const data = JSON.parse(raw);
-                switch (eventType) {
-                  case "chat_text_delta":
-                    handlers.onTextDelta?.(data.delta ?? data);
-                    break;
-                  case "chat_image":
-                    handlers.onImage?.(data);
-                    break;
-                  case "chat_canvas":
-                    handlers.onCanvas?.(data);
-                    break;
-                  case "chat_video_queued":
-                    handlers.onVideoQueued?.(data);
-                    break;
-                  case "chat_video_done":
-                    handlers.onVideoDone?.(data);
-                    break;
-                  case "chat_done":
-                    handlers.onDone?.();
-                    break;
-                }
-              } catch {
-                if (eventType === "chat_text_delta") {
-                  handlers.onTextDelta?.(raw);
-                }
-              }
-            }
+            currentEvent = line.slice(7).trim();
           } else if (line.startsWith("data: ")) {
             const raw = line.slice(6);
-            try {
-              const data = JSON.parse(raw);
-              if (typeof data === "string") {
-                handlers.onTextDelta?.(data);
-              } else if (data.delta) {
-                handlers.onTextDelta?.(data.delta);
-              }
-            } catch {
-              handlers.onTextDelta?.(raw);
-            }
+            const eventType = currentEvent || "chat_text_delta";
+            dispatch(eventType, raw);
+            currentEvent = "";
+          } else if (line.trim() === "") {
+            currentEvent = "";
           }
         }
       }
